@@ -1,0 +1,95 @@
+import os
+import sys
+from paddleocr import PaddleOCR
+import pandas as pd
+import numpy as np
+
+# PaddleOCR initialisieren mit deutschem Modell
+ocr = PaddleOCR(use_angle_cls=True, lang='german')
+
+def reconstruct_table(result):
+    # Extrahiere Koordinaten und Text
+    data = []
+    for line in result:
+        for item in line:
+            bbox = item[0]
+            text = item[1][0]
+            x = (bbox[0][0] + bbox[1][0] + bbox[2][0] + bbox[3][0]) / 4
+            y = (bbox[0][1] + bbox[1][1] + bbox[2][1] + bbox[3][1]) / 4
+            data.append((y, x, text))
+    
+    # Sortiere nach Y-Koordinate (Zeilen)
+    data.sort(key=lambda x: x[0])
+    
+    # Gruppiere Elemente in Zeilen
+    rows = []
+    current_row = []
+    last_y = data[0][0]
+    for y, x, text in data:
+        if abs(y - last_y) > 15:  # Annahme: Neue Zeile, wenn Y-Abstand > 15 Pixel
+            if current_row:
+                rows.append(sorted(current_row, key=lambda x: x[1]))  # Sortiere Zeile nach X-Koordinate
+            current_row = [(x, text)]
+            last_y = y
+        else:
+            current_row.append((x, text))
+    if current_row:
+        rows.append(sorted(current_row, key=lambda x: x[1]))
+    
+    # Finde die maximale Anzahl von Spalten
+    max_cols = max(len(row) for row in rows)
+    
+    # Erstelle eine einheitliche Tabellenstruktur
+    table = []
+    for row in rows:
+        table_row = [cell[1] for cell in row] + [''] * (max_cols - len(row))
+        table.append(table_row)
+    
+    return table
+
+def process_image(image_path):
+    # OCR durchführen
+    result = ocr.ocr(image_path, cls=True)
+    
+    # Tabelle rekonstruieren
+    table_data = reconstruct_table(result)
+    
+    # Daten in ein DataFrame konvertieren
+    df = pd.DataFrame(table_data)
+    
+    # Als CSV speichern
+    csv_path = os.path.splitext(image_path)[0] + '.csv'
+    df.to_csv(csv_path, index=False, header=False, lineterminator='\n')
+    print(f"CSV gespeichert als {csv_path}")
+    
+    # Als Markdown speichern
+    md_path = os.path.splitext(image_path)[0] + '.md'
+    try:
+        md_content = df.to_markdown(index=False, headers=False)
+        with open(md_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(md_content)
+        print(f"Markdown gespeichert als {md_path}")
+    except Exception as e:
+        print(f"Fehler beim Speichern als Markdown: {e}")
+        print("Speichere stattdessen als einfachen Text...")
+        with open(md_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(df.to_string(index=False, header=False))
+    
+    # Als Text speichern
+    txt_path = os.path.splitext(image_path)[0] + '.txt'
+    with open(txt_path, 'w', encoding='utf-8', newline='\n') as f:
+        for row in table_data:
+            f.write('\t'.join(row) + '\n')
+    print(f"Text gespeichert als {txt_path}")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Verwendung: python ocr_table.py <Pfad zum Bild>")
+        sys.exit(1)
+    
+    image_path = sys.argv[1]
+    if not os.path.exists(image_path):
+        print(f"Fehler: Die Datei {image_path} existiert nicht.")
+        sys.exit(1)
+    
+    process_image(image_path)
